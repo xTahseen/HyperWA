@@ -1,6 +1,7 @@
 const { HyperWaBot } = require('./Core/bot');
 const logger = require('./Core/logger');
 const config = require('./config');
+global.crypto = require('crypto');
 
 async function main() {
     try {
