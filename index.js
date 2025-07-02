@@ -1,5 +1,5 @@
-const { HyperWaBot } = require('./core/bot');
-const logger = require('./core/logger');
+const { HyperWaBot } = require('./Core/bot');
+const logger = require('./Core/logger');
 const config = require('./config');
 
 async function main() {
