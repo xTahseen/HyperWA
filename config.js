@@ -1,3 +1,4 @@
+
 class Config {
     constructor() {
         this.defaultConfig = {
@@ -7,10 +8,10 @@ class Config {
                 prefix: '.',
                 version: '2.0.0',
                 owner: '923298784489@s.whatsapp.net',
-                clearAuthOnStart: false // debug only
+                clearAuthOnStart: false
             },
             features: {
-                mode: 'public', // public or private
+                mode: 'public',
                 autoViewStatus: true,
                 customModules: true,
                 rateLimiting: true,
@@ -43,7 +44,10 @@ class Config {
                     profilePicSync: true,
                     callLogs: true,
                     statusSync: true,
-                    biDirectional: true
+                    biDirectional: true,
+                    presenceUpdates: true,
+                    readReceipts: true,
+                    animatedStickers: true
                 }
             },
             logging: {
