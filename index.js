@@ -3,7 +3,7 @@ const logger = require('./core/logger');
 
 async function main() {
     try {
-        logger.info('🚀 Starting NexusWA...');
+        logger.info('🚀 Starting HyperWA...');
         
         const bot = new NexusWA();
         await bot.initialize();
