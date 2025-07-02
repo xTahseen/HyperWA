@@ -5,7 +5,7 @@ async function main() {
     try {
         logger.info('🚀 Starting HyperWA...');
         
-        const bot = new NexusWA();
+        const bot = new HyperWA();
         await bot.initialize();
         
         // Graceful shutdown
@@ -22,7 +22,7 @@ async function main() {
         });
 
     } catch (err) {
-        logger.error("💥 Failed to start NexusWA:", err);
+        logger.error("💥 Failed to start HyperWA:", err);
         console.error(err);
     }
 }
