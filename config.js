@@ -3,7 +3,7 @@ class Config {
     constructor() {
         this.defaultConfig = {
             bot: {
-                name: 'NexusWA',
+                name: 'HyperWa',
                 company: 'Dawium Technologies',
                 prefix: '.',
                 version: '2.0.0',
