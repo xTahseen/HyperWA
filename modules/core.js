@@ -1,212 +1,394 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
-const fs = require('fs-extra');
-const path = require('path');
 
 const config = require('../config');
-const logger = require('./logger');
-const MessageHandler = require('./message-handler');
-const TelegramBridge = require('../watg-bridge/bridge');
-const { connectDb } = require('../utils/db');
-const ModuleLoader = require('./module-loader');
+const fs = require('fs-extra');
+const path = require('path');
+const helpers = require('../utils/helpers');
 
-class HyperWaBot {
-    constructor() {
-        this.sock = null;
-        this.authPath = './auth_info';
-        this.messageHandler = new MessageHandler(this);
-        this.telegramBridge = null;
-        this.isShuttingDown = false;
-        this.db = null;
-        this.moduleLoader = new ModuleLoader(this);
-        this.qrCodeSent = false;
+class CoreCommands {
+    constructor(bot) {
+        this.bot = bot;
+        this.name = 'core';
+        this.metadata = {
+            description: 'Core commands for HyperWa Userbot management and system information',
+            version: '3.0.0',
+            author: 'HyperWa Technologies',
+            category: 'system',
+            dependencies: ['@whiskeysockets/baileys', 'fs-extra']
+        };
+        this.commands = [
+            {
+                name: 'ping',
+                description: 'Check bot response time',
+                usage: '.ping',
+                permissions: 'public',
+                ui: {
+                    processingText: '🏓 *Pinging...*\n\n⏳ Measuring response time...',
+                    errorText: '❌ *Ping Failed*'
+                },
+                execute: this.ping.bind(this)
+            },
+            {
+                name: 'status',
+                description: 'Show bot status and statistics',
+                usage: '.status',
+                permissions: 'public',
+                ui: {
+                    processingText: '📊 *Checking Status...*\n\n⏳ Gathering system information...',
+                    errorText: '❌ *Status Check Failed*'
+                },
+                execute: this.status.bind(this)
+            },
+            {
+                name: 'restart',
+                description: 'Restart the bot (owner only)',
+                usage: '.restart',
+                permissions: 'owner',
+                ui: {
+                    processingText: '🔄 *Restarting Bot...*\n\n⏳ Please wait...',
+                    errorText: '❌ *Restart Failed*'
+                },
+                execute: this.restart.bind(this)
+            },
+            {
+                name: 'sync',
+                description: 'Sync contacts from WhatsApp',
+                usage: '.sync',
+                permissions: 'public',
+                ui: {
+                    processingText: '📞 *Syncing Contacts...*\n\n⏳ Please wait...',
+                    errorText: '❌ *Contact Sync Failed*'
+                },
+                execute: this.sync.bind(this)
+            },
+            {
+                name: 'mode',
+                description: 'Toggle bot mode between public and private',
+                usage: '.mode [public|private]',
+                permissions: 'owner',
+                ui: {
+                    processingText: '🌐 *Changing Mode...*\n\n⏳ Updating settings...',
+                    errorText: '❌ *Mode Change Failed*'
+                },
+                execute: this.toggleMode.bind(this)
+            },
+            {
+                name: 'logs',
+                description: 'Send or display bot logs (owner only)',
+                usage: '.logs [display]',
+                permissions: 'owner',
+                ui: {
+                    processingText: '📜 *Loading Logs...*\n\n⏳ Gathering log files...',
+                    errorText: '❌ *Log Loading Failed*'
+                },
+                execute: this.logs.bind(this)
+            },
+            {
+                name: 'ban',
+                description: 'Ban a user from using the bot',
+                usage: '.ban <phone_number>',
+                permissions: 'owner',
+                ui: {
+                    processingText: '🚫 *Banning User...*\n\n⏳ Processing ban...',
+                    errorText: '❌ *Ban Failed*'
+                },
+                execute: this.banUser.bind(this)
+            },
+            {
+                name: 'unban',
+                description: 'Unban a user',
+                usage: '.unban <phone_number>',
+                permissions: 'owner',
+                ui: {
+                    processingText: '✅ *Unbanning User...*\n\n⏳ Processing unban...',
+                    errorText: '❌ *Unban Failed*'
+                },
+                execute: this.unbanUser.bind(this)
+            },
+            {
+                name: 'broadcast',
+                description: 'Send a message to all chats',
+                usage: '.broadcast <message>',
+                permissions: 'owner',
+                ui: {
+                    processingText: '📢 *Broadcasting Message...*\n\n⏳ Sending to all chats...',
+                    errorText: '❌ *Broadcast Failed*'
+                },
+                execute: this.broadcast.bind(this)
+            },
+            {
+                name: 'clearlogs',
+                description: 'Clear bot log files',
+                usage: '.clearlogs',
+                permissions: 'owner',
+                ui: {
+                    processingText: '🗑️ *Clearing Logs...*\n\n⏳ Removing log files...',
+                    errorText: '❌ *Log Clear Failed*'
+                },
+                execute: this.clearLogs.bind(this)
+            },
+            {
+                name: 'stats',
+                description: 'Show bot usage statistics',
+                usage: '.stats',
+                permissions: 'public',
+                ui: {
+                    processingText: '📊 *Gathering Statistics...*\n\n⏳ Calculating usage data...',
+                    errorText: '❌ *Stats Loading Failed*'
+                },
+                execute: this.stats.bind(this)
+            }
+        ];
+        this.startTime = Date.now();
+        this.commandCounts = new Map();
     }
 
-    async initialize() {
-        logger.info('🔧 Initializing HyperWa Userbot...');
+    async ping(msg, params, context) {
+        const start = Date.now();
+        const latency = Date.now() - start;
+        this.incrementCommandCount('ping');
+        return `🏓 *Pong!*\n\n⚡ Latency: ${latency}ms\n⏰ ${new Date().toLocaleTimeString()}`;
+    }
+
+    async status(msg, params, context) {
+        const uptime = this.getUptime();
+        const totalCommands = Array.from(this.commandCounts.values()).reduce((a, b) => a + b, 0);
+        this.incrementCommandCount('status');
         
-        // Connect to the database
-        try {
-            this.db = await connectDb();
-            logger.info('✅ Database connected successfully!');
-        } catch (error) {
-            logger.error('❌ Failed to connect to database:', error);
-            process.exit(1);
+        return `🤖 *${config.get('bot.name')} Status*\n\n` +
+               `🆚 Version: ${config.get('bot.version')}\n` +
+               `🏢 Company: ${config.get('bot.company')}\n` +
+               `👤 Owner: ${config.get('bot.owner')?.split('@')[0] || 'Not set'}\n` +
+               `⏰ Uptime: ${uptime}\n` +
+               `📊 Commands Executed: ${totalCommands}\n` +
+               `🌐 Mode: ${config.get('features.mode')}\n` +
+               `🔗 Telegram Bridge: ${config.get('telegram.enabled') ? 'Enabled' : 'Disabled'}\n` +
+               `📞 Contacts Synced: ${this.bot.telegramBridge?.contactMappings.size || 0}`;
+    }
+
+    async restart(msg, params, context) {
+        if (this.bot.telegramBridge) {
+            await this.bot.telegramBridge.logToTelegram('🔄 Bot Restart', 'Initiated by owner');
+        }
+        this.incrementCommandCount('restart');
+        setTimeout(() => process.exit(0), 1000);
+        return '🔄 *Bot Restarting...*\n\nPlease wait for reconnection...';
+    }
+
+    async sync(msg, params, context) {
+        if (!this.bot.telegramBridge) {
+            return '❌ Telegram bridge not enabled';
+        }
+        
+        await this.bot.telegramBridge.syncContacts();
+        this.incrementCommandCount('sync');
+        
+        return `✅ *Contact Sync Complete*\n\n📞 Synced ${this.bot.telegramBridge.contactMappings.size} contacts`;
+    }
+
+    async toggleMode(msg, params, context) {
+        if (params.length === 0) {
+            return `🌐 *Current Mode*: ${config.get('features.mode')}\n\nUsage: \`.mode [public|private]\``;
         }
 
-        // Initialize Telegram bridge first (for QR code sending)
-        if (config.get('telegram.enabled')) {
+        const mode = params[0].toLowerCase();
+        if (mode !== 'public' && mode !== 'private') {
+            return '❌ Invalid mode. Use `.mode public` or `.mode private`.';
+        }
+
+        config.set('features.mode', mode);
+        this.incrementCommandCount('mode');
+        
+        if (this.bot.telegramBridge) {
+            await this.bot.telegramBridge.logToTelegram('🌐 Bot Mode Changed', `New Mode: ${mode}`);
+        }
+        
+        return `✅ *Bot Mode Changed*\n\n🌐 New Mode: ${mode}\n⏰ ${new Date().toLocaleTimeString()}`;
+    }
+
+    async logs(msg, params, context) {
+        const displayMode = params[0]?.toLowerCase() === 'display';
+        if (!config.get('logging.saveToFile') && displayMode) {
+            return '❌ Log saving to file is not enabled';
+        }
+
+        const logDir = path.join(__dirname, '../logs');
+        if (!await fs.pathExists(logDir)) {
+            return '❌ No logs found';
+        }
+
+        this.incrementCommandCount('logs');
+
+        if (displayMode) {
             try {
-                this.telegramBridge = new TelegramBridge(this);
-                await this.telegramBridge.initialize();
-                logger.info('✅ Telegram bridge initialized');
+                const logFiles = (await fs.readdir(logDir))
+                    .filter(file => file.endsWith('.log'))
+                    .sort((a, b) => fs.statSync(path.join(logDir, b)).mtime - fs.statSync(path.join(logDir, a)).mtime);
+                
+                if (logFiles.length === 0) {
+                    return '❌ No log files found';
+                }
+
+                const latestLogFile = path.join(logDir, logFiles[0]);
+                const logContent = await fs.readFile(latestLogFile, 'utf8');
+                const logLines = logContent.split('\n').filter(line => line.trim());
+                const recentLogs = logLines.slice(-10).join('\n'); // Last 10 lines
+                
+                if (this.bot.telegramBridge) {
+                    await this.bot.telegramBridge.logToTelegram('📜 Logs Displayed', 'Recent logs viewed by owner');
+                }
+                
+                return `📜 *Recent Logs* (Last 10 Entries)\n\n\`\`\`\n${recentLogs || 'No recent logs'}\n\`\`\`\n⏰ ${new Date().toLocaleTimeString()}`;
             } catch (error) {
-                logger.error('❌ Failed to initialize Telegram bridge:', error);
+                throw new Error(`Failed to display logs: ${error.message}`);
+            }
+        } else {
+            try {
+                const logFiles = (await fs.readdir(logDir))
+                    .filter(file => file.endsWith('.log'))
+                    .sort((a, b) => fs.statSync(path.join(logDir, b)).mtime - fs.statSync(path.join(logDir, a)).mtime);
+                
+                if (logFiles.length === 0) {
+                    return '❌ No log files found';
+                }
+
+                const latestLogFile = path.join(logDir, logFiles[0]);
+                await context.bot.sendMessage(context.sender, {
+                    document: { source: latestLogFile, filename: logFiles[0] },
+                    caption: `📜 *Latest Log File*\n\n📄 File: ${logFiles[0]}\n⏰ ${new Date().toLocaleTimeString()}`
+                });
+                
+                if (this.bot.telegramBridge) {
+                    await this.bot.telegramBridge.logToTelegram('📜 Log File Sent', `File: ${logFiles[0]}`);
+                }
+                
+                return `✅ *Log File Sent*\n\n📄 File: ${logFiles[0]}`;
+            } catch (error) {
+                throw new Error(`Failed to send log file: ${error.message}`);
             }
         }
-
-        // Load modules using the ModuleLoader
-        await this.moduleLoader.loadModules();
-        
-        // Start WhatsApp connection
-        await this.startWhatsApp();
-        
-        logger.info('✅ HyperWa Userbot initialized successfully!');
     }
 
-async startWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
-    const { version } = await fetchLatestBaileysVersion();
+    async banUser(msg, params, context) {
+        if (params.length === 0) {
+            return '❌ Usage: `.ban <phone_number>`';
+        }
 
-    try {
-        this.sock = makeWASocket({
-            auth: state,
-            version,
-            printQRInTerminal: false, // Handle QR manually
-            logger: logger.child({ module: 'baileys' }),
-            getMessage: async (key) => ({ conversation: 'Message not found' })
-        });
+        const phone = params[0].replace('+', '');
+        const blockedUsers = config.get('security.blockedUsers') || [];
+        if (blockedUsers.includes(phone)) {
+            return `❌ User ${phone} is already banned`;
+        }
 
-        // Timeout for QR code scanning
-        const connectionTimeout = setTimeout(() => {
-            if (!this.sock.user) {
-                logger.warn('❌ QR code scan timed out after 30 seconds');
-                logger.info('🔄 Retrying with new QR code...');
-                this.sock.end(); // Close current socket
-                setTimeout(() => this.startWhatsApp(), 5000); // Restart connection
-            }
-        }, 30000);
-
-        this.setupEventHandlers(saveCreds);
-        await new Promise(resolve => this.sock.ev.on('connection.update', update => {
-            if (update.connection === 'open') {
-                clearTimeout(connectionTimeout); // Clear timeout on successful connection
-                resolve();
-            }
-        }));
-    } catch (error) {
-        logger.error('❌ Failed to initialize WhatsApp socket:', error);
-        logger.info('🔄 Retrying with new QR code...');
-        setTimeout(() => this.startWhatsApp(), 5000); // Retry on error
+        blockedUsers.push(phone);
+        config.set('security.blockedUsers', blockedUsers);
+        this.incrementCommandCount('ban');
+        
+        if (this.bot.telegramBridge) {
+            await this.bot.telegramBridge.logToTelegram('🚫 User Banned', `Phone: ${phone}`);
+        }
+        
+        return `🚫 *User Banned*\n\n📱 Phone: ${phone}\n⏰ ${new Date().toLocaleTimeString()}`;
     }
-}
 
-setupEventHandlers(saveCreds) {
-    this.sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    async unbanUser(msg, params, context) {
+        if (params.length === 0) {
+            return '❌ Usage: `.unban <phone_number>`';
+        }
 
-        if (qr) {
-            logger.info('📱 Scan QR code with WhatsApp:');
-            qrcode.generate(qr, { small: true });
+        const phone = params[0].replace('+', '');
+        const blockedUsers = config.get('security.blockedUsers') || [];
+        if (!blockedUsers.includes(phone)) {
+            return `❌ User ${phone} is not banned`;
+        }
 
-            // Send QR code to Telegram if bridge is enabled
-            if (this.telegramBridge && config.get('telegram.enabled') && config.get('telegram.botToken')) {
+        config.set('security.blockedUsers', blockedUsers.filter(u => u !== phone));
+        this.incrementCommandCount('unban');
+        
+        if (this.bot.telegramBridge) {
+            await this.bot.telegramBridge.logToTelegram('✅ User Unbanned', `Phone: ${phone}`);
+        }
+        
+        return `✅ *User Unbanned*\n\n📱 Phone: ${phone}\n⏰ ${new Date().toLocaleTimeString()}`;
+    }
+
+    async broadcast(msg, params, context) {
+        if (params.length === 0) {
+            return '❌ Usage: `.broadcast <message>`';
+        }
+
+        const message = params.join(' ');
+        const chats = this.bot.telegramBridge?.chatMappings.keys() || [];
+        let sentCount = 0;
+
+        for (const chatJid of chats) {
+            if (chatJid !== 'status@broadcast' && chatJid !== 'call@broadcast') {
                 try {
-                    await this.telegramBridge.sendQRCode(qr);
-                    logger.info('✅ QR code sent to Telegram');
+                    await this.bot.sendMessage(chatJid, { text: `📢 *Broadcast*\n\n${message}` });
+                    sentCount++;
                 } catch (error) {
-                    logger.error('❌ Failed to send QR code to Telegram:', error);
+                    logger.error(`Failed to send broadcast to ${chatJid}:`, error);
                 }
             }
         }
 
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode || 0;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-            if (shouldReconnect && !this.isShuttingDown) {
-                logger.warn('🔄 Connection closed, reconnecting...');
-                setTimeout(() => this.startWhatsApp(), 5000);
-            } else {
-                logger.error('❌ Connection closed permanently. Please delete auth_info and restart.');
-                process.exit(1); // Exit only for permanent closure (e.g., logged out)
-            }
-        } else if (connection === 'open') {
-            await this.onConnectionOpen();
-        }
-    });
-
-    this.sock.ev.on('creds.update', saveCreds);
-    this.sock.ev.on('messages.upsert', this.messageHandler.handleMessages.bind(this.messageHandler));
-}
-
-    async onConnectionOpen() {
-        logger.info(`✅ Connected to WhatsApp! User: ${this.sock.user?.id || 'Unknown'}`);
+        this.incrementCommandCount('broadcast');
         
-        // Set owner if not set
-        if (!config.get('bot.owner') && this.sock.user) {
-            config.set('bot.owner', this.sock.user.id);
-            logger.info(`👑 Owner set to: ${this.sock.user.id}`);
+        if (this.bot.telegramBridge) {
+            await this.bot.telegramBridge.logToTelegram('📢 Broadcast Sent', `Message: ${message}\nSent to ${sentCount} chats`);
         }
-
-        // Setup WhatsApp handlers for Telegram bridge
-        if (this.telegramBridge) {
-            await this.telegramBridge.setupWhatsAppHandlers();
-        }
-
-        // Send startup message to owner and Telegram
-        await this.sendStartupMessage();
         
-        // Notify Telegram bridge of connection
-        if (this.telegramBridge) {
-            await this.telegramBridge.syncWhatsAppConnection();
-        }
+        return `📢 *Broadcast Sent*\n\n📩 Message: ${message}\n📊 Sent to ${sentCount} chats\n⏰ ${new Date().toLocaleTimeString()}`;
     }
 
-    async sendStartupMessage() {
-        const owner = config.get('bot.owner');
-        if (!owner) return;
+    async clearLogs(msg, params, context) {
+        if (!config.get('logging.saveToFile')) {
+            return '❌ Log saving to file is not enabled';
+        }
 
-        const startupMessage = `🚀 *${config.get('bot.name')} v${config.get('bot.version')}* is now online!\n\n` +
-                              `🔥 *HyperWa Features Active:*\n` +
-                              `• 📱 Modular Architecture\n` +
-                              `• 🤖 Telegram Bridge: ${config.get('telegram.enabled') ? '✅' : '❌'}\n` +
-                              `• 🛡️ Rate Limiting: ${config.get('features.rateLimiting') ? '✅' : '❌'}\n` +
-                              `• 🔧 Custom Modules: ${config.get('features.customModules') ? '✅' : '❌'}\n` +
-                              `• 👀 Auto View Status: ${config.get('features.autoViewStatus') ? '✅' : '❌'}\n` +
-                              `• ⚡ Smart Processing: ${config.get('features.smartProcessing') ? '✅' : '❌'}\n` +
-                              `• 🎭 Auto Reactions: ${config.get('features.autoReact') ? '✅' : '❌'}\n\n` +
-                              `Type *${config.get('bot.prefix')}help* for available commands!`;
-
+        const logDir = path.join(__dirname, '../logs');
         try {
-            await this.sock.sendMessage(owner, { text: startupMessage });
+            await fs.emptyDir(logDir);
+            this.incrementCommandCount('clearlogs');
             
-            if (this.telegramBridge) {
-                await this.telegramBridge.logToTelegram('🚀 HyperWa Bot Started', startupMessage);
+            if (this.bot.telegramBridge) {
+                await this.bot.telegramBridge.logToTelegram('🗑️ Logs Cleared', 'Log files removed');
             }
+            
+            return `✅ *Logs Cleared*\n\n🗑️ Log files removed\n⏰ ${new Date().toLocaleTimeString()}`;
         } catch (error) {
-            logger.error('Failed to send startup message:', error);
+            throw new Error(`Failed to clear logs: ${error.message}`);
         }
     }
 
-    async connect() {
-        if (!this.sock) {
-            await this.startWhatsApp();
-        }
-        return this.sock;
+    async stats(msg, params, context) {
+        const totalCommands = Array.from(this.commandCounts.values()).reduce((a, b) => a + b, 0);
+        const commandBreakdown = Array.from(this.commandCounts.entries())
+            .map(([cmd, count]) => `  • \`${cmd}\`: ${count}`)
+            .join('\n');
+        const messageCount = this.bot.telegramBridge?.userMappings.size || 0;
+        
+        this.incrementCommandCount('stats');
+        
+        return `📊 *Bot Statistics*\n\n` +
+               `📟 Total Commands: ${totalCommands}\n` +
+               `📋 Command Breakdown:\n${commandBreakdown || '  • None'}\n` +
+               `💬 Total Users: ${messageCount}\n` +
+               `📞 Active Chats: ${this.bot.telegramBridge?.chatMappings.size || 0}\n` +
+               `👥 Contacts: ${this.bot.telegramBridge?.contactMappings.size || 0}`;
     }
 
-    async sendMessage(jid, content) {
-        if (!this.sock) {
-            throw new Error('WhatsApp socket not initialized');
-        }
-        return await this.sock.sendMessage(jid, content);
+    getUptime() {
+        const seconds = Math.floor((Date.now() - this.startTime) / 1000);
+        const days = Math.floor(seconds / (3600 * 24));
+        const hours = Math.floor((seconds % (3600 * 24)) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+        return `${days}d ${hours}h ${minutes}m ${secs}s`;
     }
 
-    async shutdown() {
-        logger.info('🛑 Shutting down HyperWa Userbot...');
-        this.isShuttingDown = true;
-        
-        if (this.telegramBridge) {
-            await this.telegramBridge.shutdown();
-        }
-        
-        if (this.sock) {
-            await this.sock.end();
-        }
-        
-        logger.info('✅ HyperWa Userbot shutdown complete');
+    incrementCommandCount(command) {
+        this.commandCounts.set(command, (this.commandCounts.get(command) || 0) + 1);
     }
 }
 
-module.exports = { HyperWaBot };
+module.exports = CoreCommands;
