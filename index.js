@@ -1,5 +1,5 @@
-const { NexusWA } = require('./core/bot');
-const logger = require('./core/logger');
+const { NexusWA } = require('./Core/bot');
+const logger = require('./Core/logger');
 
 async function main() {
     try {
