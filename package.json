@@ -1,5 +1,5 @@
 {
-  "name": "advanced-whatsapp-bot",
+  "name": "HyperWa",
   "version": "2.0.0",
   "description": "Advanced modular WhatsApp bot with Telegram integration",
   "main": "index.js",
@@ -42,6 +42,6 @@
     "modular",
     "advanced"
   ],
-  "author": "Sey",
+  "author": "Arshman",
   "license": "MIT"
 }
