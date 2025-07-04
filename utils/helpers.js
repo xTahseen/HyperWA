@@ -1,114 +1,81 @@
-
-const logger = require('../Core/logger');
 const config = require('../config');
 
 class Helpers {
-    // FIXED: Smart error handling that edits the ORIGINAL command message
     static async smartErrorRespond(bot, originalMsg, options = {}) {
         const {
             processingText = '⏳ Processing...',
             errorText = '❌ Something went wrong.',
-            actionFn,
-            autoReact = config.get('features.autoReact'),
-            editMessages = config.get('features.editMessages')
+            actionFn = () => { throw new Error('No action provided'); },
+            autoReact = config.get('features.autoReact', true),
+            editMessages = config.get('features.messageEdit', true),
+            smartProcessing = config.get('features.smartProcessing', false)
         } = options;
 
+        if (!bot?.sock?.sendMessage || !originalMsg?.key?.remoteJid) return;
+
         const sender = originalMsg.key.remoteJid;
+        let processingMsgKey = null;
 
         try {
-            // React with processing emoji on the ORIGINAL command message
+            // React with ⏳
             if (autoReact) {
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        react: { key: originalMsg.key, text: '⏳' }
-                    });
-                } catch (reactError) {
-                    logger.debug('Failed to react with processing:', reactError);
-                }
+                await bot.sock.sendMessage(sender, {
+                    react: { key: originalMsg.key, text: '⏳' }
+                });
             }
 
-            // FIXED: Edit the ORIGINAL command message instead of creating new one
-            if (config.get('features.smartProcessing') && editMessages) {
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        text: processingText,
-                        edit: originalMsg.key
-                    });
-                } catch (editError) {
-                    logger.debug('Failed to edit original message with processing text:', editError);
-                    // Fallback: send new message
-                    await bot.sendMessage(sender, { text: processingText });
-                }
+            // Show "processing..." message
+            if (editMessages) {
+                const processingMsg = await bot.sendMessage(sender, { text: processingText });
+                processingMsgKey = processingMsg.key;
             }
 
-            // Execute the action
+            // Run command
             const result = await actionFn();
 
-            // Success reaction on original message
+            // Wait 1s then remove ⏳
             if (autoReact) {
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        react: { key: originalMsg.key, text: '✅' }
-                    });
-                } catch (reactError) {
-                    logger.debug('Failed to react with success:', reactError);
-                }
+                await Helpers.sleep(1000);
+                await bot.sock.sendMessage(sender, {
+                    react: { key: originalMsg.key, text: '' }
+                });
             }
 
-            // FIXED: Edit the ORIGINAL command message with result
-            if (editMessages && result && typeof result === 'string') {
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        text: result,
-                        edit: originalMsg.key
-                    });
-                } catch (editError) {
-                    logger.debug('Failed to edit original message with result:', editError);
-                    // Fallback: send new message
-                    await bot.sendMessage(sender, { text: result });
-                }
-            } else if (editMessages && !result) {
-                // Edit with success message if no result returned
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        text: '✅ Command completed successfully!',
-                        edit: originalMsg.key
-                    });
-                } catch (editError) {
-                    logger.debug('Failed to edit original message with success:', editError);
-                }
+            // Edit result or send new
+            if (processingMsgKey && result && typeof result === 'string') {
+                await bot.sock.sendMessage(sender, {
+                    text: result,
+                    edit: processingMsgKey
+                });
+            } else if (processingMsgKey && !result) {
+                await bot.sock.sendMessage(sender, {
+                    text: '✅ Done!',
+                    edit: processingMsgKey
+                });
+            } else if (result && typeof result === 'string') {
+                await bot.sendMessage(sender, { text: result });
             }
 
             return result;
 
         } catch (error) {
-            logger.error('Error in smartErrorRespond:', error);
-
-            // Error reaction on original message
+            // Wait 1.5s then replace ⏳ with ❌
             if (autoReact) {
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        react: { key: originalMsg.key, text: '❌' }
-                    });
-                } catch (reactError) {
-                    logger.debug('Failed to react with error:', reactError);
-                }
+                await Helpers.sleep(1500);
+                await bot.sock.sendMessage(sender, {
+                    react: { key: originalMsg.key, text: '❌' }
+                });
             }
 
-            // FIXED: Edit the ORIGINAL command message with error
-            const finalErrorText = `${errorText}\n\n🔍 Error: ${error.message}`;
-            
-            if (editMessages) {
-                try {
-                    await bot.sock.sendMessage(sender, {
-                        text: finalErrorText,
-                        edit: originalMsg.key
-                    });
-                } catch (editError) {
-                    logger.debug('Failed to edit original message with error:', editError);
-                    // Fallback: send new message
-                    await bot.sendMessage(sender, { text: finalErrorText });
-                }
+            const finalErrorText = smartProcessing
+                ? `${errorText}\n\n🔍 Error: ${error.message}`
+                : errorText;
+
+            if (processingMsgKey) {
+                await bot.sock.sendMessage(sender, {
+                    text: finalErrorText,
+                    edit: processingMsgKey
+                });
             } else {
                 await bot.sendMessage(sender, { text: finalErrorText });
             }
@@ -117,49 +84,55 @@ class Helpers {
         }
     }
 
-    // Format uptime
+    static async sendCommandResponse(bot, originalMsg, responseText) {
+        await this.smartErrorRespond(bot, originalMsg, {
+            processingText: '⏳ Checking command...',
+            errorText: responseText,
+            actionFn: async () => {
+                throw new Error(responseText);
+            }
+        });
+    }
+
     static formatUptime(startTime) {
+        if (typeof startTime !== 'number') return '0s';
         const seconds = Math.floor((Date.now() - startTime) / 1000);
-        const days = Math.floor(seconds / (3600 * 24));
-        const hours = Math.floor((seconds % (3600 * 24)) / 3600);
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
         const secs = seconds % 60;
-        return `${days}d ${hours}h ${minutes}m ${secs}s`;
+        const parts = [];
+        if (days) parts.push(`${days}d`);
+        if (hours) parts.push(`${hours}h`);
+        if (minutes) parts.push(`${minutes}m`);
+        if (secs || parts.length === 0) parts.push(`${secs}s`);
+        return parts.join(' ');
     }
 
-    // Format file size
     static formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
+        if (typeof bytes !== 'number' || bytes <= 0) return '0 Bytes';
         const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
     }
 
-    // Clean phone number
     static cleanPhoneNumber(phone) {
-        return phone.replace(/[^\d]/g, '');
+        return typeof phone === 'string' ? phone.replace(/[^\d]/g, '') : '';
     }
 
-    // Check if user is owner
     static isOwner(participant) {
         const owner = config.get('bot.owner');
         return participant === owner;
     }
 
-    // Generate random string
     static generateRandomString(length = 8) {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let result = '';
-        for (let i = 0; i < length; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
+        return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     }
 
-    // Sleep function
     static sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
     }
 }
 
