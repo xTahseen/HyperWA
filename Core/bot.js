@@ -9,6 +9,7 @@ const MessageHandler = require('./message-handler');
 const TelegramBridge = require('../watg-bridge/bridge');
 const { connectDb } = require('../utils/db');
 const ModuleLoader = require('./module-loader');
+const { useMongoAuthState } = require('../utils/mongoAuthState');
 
 class HyperWaBot {
     constructor() {
@@ -20,6 +21,7 @@ class HyperWaBot {
         this.db = null;
         this.moduleLoader = new ModuleLoader(this);
         this.qrCodeSent = false;
+        this.useMongoAuth = config.get('auth.useMongoAuth', false); // Add config option for MongoDB auth
     }
 
     async initialize() {
@@ -31,7 +33,9 @@ class HyperWaBot {
             logger.info('✅ Database connected successfully!');
         } catch (error) {
             logger.error('❌ Failed to connect to database:', error);
-            process.exit(1);
+            logger.info('🔄 Retrying database connection in 10 seconds...');
+            setTimeout(() => this.initialize(), 10000);
+            return;
         }
 
         // Initialize Telegram bridge first (for QR code sending)
@@ -42,11 +46,17 @@ class HyperWaBot {
                 logger.info('✅ Telegram bridge initialized');
             } catch (error) {
                 logger.error('❌ Failed to initialize Telegram bridge:', error);
+                // Don't exit, continue without Telegram bridge
             }
         }
 
         // Load modules using the ModuleLoader
-        await this.moduleLoader.loadModules();
+        try {
+            await this.moduleLoader.loadModules();
+        } catch (error) {
+            logger.error('❌ Failed to load modules:', error);
+            // Don't exit, continue without modules
+        }
         
         // Start WhatsApp connection
         await this.startWhatsApp();
@@ -54,83 +64,126 @@ class HyperWaBot {
         logger.info('✅ HyperWa Userbot initialized successfully!');
     }
 
-async startWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
-    const { version } = await fetchLatestBaileysVersion();
-
-    try {
-        this.sock = makeWASocket({
-            auth: state,
-            version,
-            printQRInTerminal: false, // Handle QR manually
-            logger: logger.child({ module: 'baileys' }),
-            getMessage: async (key) => ({ conversation: 'Message not found' }),
-            browser: ['HyperWa', 'Chrome', '3.0'],
-
-        });
-
-        // Timeout for QR code scanning
-        const connectionTimeout = setTimeout(() => {
-            if (!this.sock.user) {
-                logger.warn('❌ QR code scan timed out after 30 seconds');
-                logger.info('🔄 Retrying with new QR code...');
-                this.sock.end(); // Close current socket
-                setTimeout(() => this.startWhatsApp(), 5000); // Restart connection
+    async startWhatsApp() {
+        let state, saveCreds;
+        
+        // Choose auth method based on configuration
+        if (this.useMongoAuth) {
+            logger.info('🔧 Using MongoDB auth state...');
+            try {
+                ({ state, saveCreds } = await useMongoAuthState());
+            } catch (error) {
+                logger.error('❌ Failed to initialize MongoDB auth state:', error);
+                logger.info('🔄 Falling back to file-based auth...');
+                ({ state, saveCreds } = await useMultiFileAuthState(this.authPath));
             }
-        }, 30000);
+        } else {
+            logger.info('🔧 Using file-based auth state...');
+            ({ state, saveCreds } = await useMultiFileAuthState(this.authPath));
+        }
 
-        this.setupEventHandlers(saveCreds);
-        await new Promise(resolve => this.sock.ev.on('connection.update', update => {
-            if (update.connection === 'open') {
-                clearTimeout(connectionTimeout); // Clear timeout on successful connection
-                resolve();
-            }
-        }));
-    } catch (error) {
-        logger.error('❌ Failed to initialize WhatsApp socket:', error);
-        logger.info('🔄 Retrying with new QR code...');
-        setTimeout(() => this.startWhatsApp(), 5000); // Retry on error
+        const { version } = await fetchLatestBaileysVersion();
+
+        try {
+            this.sock = makeWASocket({
+                auth: state,
+                version,
+                printQRInTerminal: false, // Handle QR manually
+                logger: logger.child({ module: 'baileys' }),
+                getMessage: async (key) => ({ conversation: 'Message not found' }),
+                browser: ['HyperWa', 'Chrome', '3.0'],
+            });
+
+            // Timeout for QR code scanning
+            const connectionTimeout = setTimeout(() => {
+                if (!this.sock.user) {
+                    logger.warn('❌ QR code scan timed out after 30 seconds');
+                    logger.info('🔄 Retrying with new QR code...');
+                    this.sock.end(); // Close current socket
+                    setTimeout(() => this.startWhatsApp(), 5000); // Restart connection
+                }
+            }, 30000);
+
+            this.setupEventHandlers(saveCreds);
+            await new Promise(resolve => this.sock.ev.on('connection.update', update => {
+                if (update.connection === 'open') {
+                    clearTimeout(connectionTimeout); // Clear timeout on successful connection
+                    resolve();
+                }
+            }));
+        } catch (error) {
+            logger.error('❌ Failed to initialize WhatsApp socket:', error);
+            logger.info('🔄 Retrying with new QR code...');
+            setTimeout(() => this.startWhatsApp(), 5000); // Retry on error
+        }
     }
-}
 
-setupEventHandlers(saveCreds) {
-    this.sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    setupEventHandlers(saveCreds) {
+        this.sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
-            logger.info('📱 Scan QR code with WhatsApp:');
-            qrcode.generate(qr, { small: true });
+            if (qr) {
+                logger.info('📱 Scan QR code with WhatsApp:');
+                qrcode.generate(qr, { small: true });
 
-            // Send QR code to Telegram if bridge is enabled
-            if (this.telegramBridge && config.get('telegram.enabled') && config.get('telegram.botToken')) {
-                try {
-                    await this.telegramBridge.sendQRCode(qr);
-                    logger.info('✅ QR code sent to Telegram');
-                } catch (error) {
-                    logger.error('❌ Failed to send QR code to Telegram:', error);
+                // Send QR code to Telegram if bridge is enabled
+                if (this.telegramBridge && config.get('telegram.enabled') && config.get('telegram.botToken')) {
+                    try {
+                        await this.telegramBridge.sendQRCode(qr);
+                        logger.info('✅ QR code sent to Telegram');
+                    } catch (error) {
+                        logger.error('❌ Failed to send QR code to Telegram:', error);
+                    }
                 }
             }
-        }
 
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode || 0;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode || 0;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-            if (shouldReconnect && !this.isShuttingDown) {
-                logger.warn('🔄 Connection closed, reconnecting...');
-                setTimeout(() => this.startWhatsApp(), 5000);
-            } else {
-                logger.error('❌ Connection closed permanently. Please delete auth_info and restart.');
-                process.exit(1); // Exit only for permanent closure (e.g., logged out)
+                if (shouldReconnect && !this.isShuttingDown) {
+                    logger.warn('🔄 Connection closed, reconnecting...');
+                    setTimeout(() => this.startWhatsApp(), 5000);
+                } else {
+                    logger.error('❌ Connection closed permanently. Clearing session and retrying...');
+                    // If using MongoDB auth, clear the session
+                    if (this.useMongoAuth) {
+                        try {
+                            const db = await connectDb();
+                            const coll = db.collection("auth");
+                            await coll.deleteOne({ _id: "session" });
+                            logger.info('🗑️ MongoDB auth session cleared');
+                        } catch (error) {
+                            logger.error('❌ Failed to clear MongoDB auth session:', error);
+                        }
+                    } else {
+                        // Clear local auth files
+                        try {
+                            await fs.remove(this.authPath);
+                            logger.info('🗑️ Local auth files cleared');
+                        } catch (error) {
+                            logger.error('❌ Failed to clear local auth files:', error);
+                        }
+                    }
+                    // Retry connection instead of exiting
+                    logger.info('🔄 Retrying connection in 10 seconds...');
+                    setTimeout(() => this.startWhatsApp(), 10000);
+                }
+            } else if (connection === 'open') {
+                await this.onConnectionOpen();
             }
-        } else if (connection === 'open') {
-            await this.onConnectionOpen();
-        }
-    });
+        });
 
-    this.sock.ev.on('creds.update', saveCreds);
-    this.sock.ev.on('messages.upsert', this.messageHandler.handleMessages.bind(this.messageHandler));
-}
+        this.sock.ev.on('creds.update', saveCreds);
+        this.sock.ev.on('messages.upsert', (update) => {
+            try {
+                this.messageHandler.handleMessages(update);
+            } catch (error) {
+                logger.error('❌ Error handling message:', error);
+                // Don't crash, just log the error and continue
+            }
+        });
+    }
 
     async onConnectionOpen() {
         logger.info(`✅ Connected to WhatsApp! User: ${this.sock.user?.id || 'Unknown'}`);
@@ -159,9 +212,11 @@ setupEventHandlers(saveCreds) {
         const owner = config.get('bot.owner');
         if (!owner) return;
 
+        const authMethod = this.useMongoAuth ? 'MongoDB' : 'File-based';
         const startupMessage = `🚀 *${config.get('bot.name')} v${config.get('bot.version')}* is now online!\n\n` +
                               `🔥 *HyperWa Features Active:*\n` +
                               `• 📱 Modular Architecture\n` +
+                              `• 🔐 Auth Method: ${authMethod}\n` +
                               `• 🤖 Telegram Bridge: ${config.get('telegram.enabled') ? '✅' : '❌'}\n` +
                               `• 🔧 Custom Modules: ${config.get('features.customModules') ? '✅' : '❌'}\n` +
                               `Type *${config.get('bot.prefix')}help* for available commands!`;
@@ -174,6 +229,7 @@ setupEventHandlers(saveCreds) {
             }
         } catch (error) {
             logger.error('Failed to send startup message:', error);
+            // Don't crash, just log the error
         }
     }
 
@@ -206,5 +262,29 @@ setupEventHandlers(saveCreds) {
         logger.info('✅ HyperWa Userbot shutdown complete');
     }
 }
+
+// Global error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+    logger.error('🚨 Uncaught Exception:', error);
+    logger.info('🔄 Bot will continue running...');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.info('🔄 Bot will continue running...');
+});
+
+// Graceful shutdown handlers
+process.on('SIGINT', async () => {
+    logger.info('🛑 Received SIGINT, shutting down gracefully...');
+    // Add your cleanup code here if needed
+    process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+    logger.info('🛑 Received SIGTERM, shutting down gracefully...');
+    // Add your cleanup code here if needed
+    process.exit(0);
+});
 
 module.exports = { HyperWaBot };
