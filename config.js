@@ -1,3 +1,4 @@
+
 class Config {
 constructor() {
     this.defaultConfig = {
@@ -9,6 +10,9 @@ constructor() {
             owner: '923298784489@s.whatsapp.net',
             clearAuthOnStart: false
         },
+          auth: {
+                useMongoAuth: true, //  set to false for file-based auth, ture mongodb auth base
+     },
         admins: [
             '923001112222',  // Just the number part, no "@s.whatsapp.net"
             '923334445555'
@@ -28,11 +32,8 @@ constructor() {
             sendPermissionError: false      // bot will send error message on comnd which are not allowed to users
         },
             mongo: {
-             session: {
-              useMongoStore: true   // Set to false to use file-based auth
-            },
                 uri: 'mongodb+srv://itxelijah07:ivp8FYGsbVfjQOkj@cluster0.wh25x.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
-                dbName: 'advancedwa'
+                dbName: 'HyperWA'
             },
             apis: {
                 ninjas: 'YOUR_API_KEY',
