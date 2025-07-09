@@ -380,49 +380,96 @@ class TelegramBridge {
         }
     }
 
-async sendQRCode(qrCode) {
-    try {
-        if (!this.telegramBot) return;
+async sendQRCode(qrData) {
+    if (!this.telegramBot) {
+        throw new Error('Telegram bot not initialized');
+    }
 
-        const qrcode = require('qrcode');
-        const qrBuffer = await qrcode.toBuffer(qrCode, {
-            type: 'png',
+    const chatId = config.get('telegram.chatId');
+    if (!chatId) {
+        throw new Error('Telegram chat ID not configured');
+    }
+
+    try {
+        // Generate QR code image
+        const qrImagePath = path.join(this.tempDir, `qr_${Date.now()}.png`);
+        await qrcode.toFile(qrImagePath, qrData, {
             width: 512,
-            margin: 2
+            margin: 2,
+            color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+            }
         });
 
-        const chatId = config.get('telegram.chatId');        // bot's main chat
-        const logChannel = config.get('telegram.logChannel'); // configured log channel
+        // Send QR code image
+        await this.telegramBot.sendPhoto(chatId, qrImagePath, {
+            caption: '📱 *WhatsApp QR Code*\n\n' +
+                    '🔄 Scan this QR code with WhatsApp to connect\n' +
+                    '⏰ QR code expires in 30 seconds\n\n' +
+                    '💡 Open WhatsApp → Settings → Linked Devices → Link a Device',
+            parse_mode: 'Markdown'
+        });
 
-        const caption = '📱 *Scan QR Code to Login to WhatsApp*\n\nScan this QR code with your WhatsApp mobile app to connect.';
-
-        // ✅ Send to main bot chat (your own chat with the bot)
-        if (chatId && !chatId.includes('YOUR_CHAT_ID')) {
-            await this.telegramBot.sendPhoto(chatId, qrBuffer, {
-                caption,
-                parse_mode: 'Markdown'
-            });
-        }
-
-        // ✅ Also send to log channel if set
-        if (logChannel && !logChannel.includes('YOUR_LOG_CHANNEL')) {
-            await this.telegramBot.sendPhoto(logChannel, qrBuffer, {
-                caption: '📱 *WhatsApp QR Code Generated*\n\nWaiting for scan...',
-                parse_mode: 'Markdown'
-            });
-        }
-
-        logger.info('📱 QR code sent to bot chat and log channel');
-
-        // Optional: Sync contacts after scan window
+        // Clean up QR code file after 60 seconds
         setTimeout(async () => {
-            await this.syncContacts();
-        }, 10000);
+            try {
+                await fs.remove(qrImagePath);
+            } catch (error) {
+                logger.debug('QR code file cleanup error:', error);
+            }
+        }, 60000);
+
+        logger.info('✅ QR code sent to Telegram successfully');
 
     } catch (error) {
-        logger.error('❌ Failed to send QR code to Telegram:', error);
+        logger.error('❌ Error sending QR code to Telegram:', error);
+        throw error;
     }
 }
+
+async sendQRCodeToChannel(qrData, channelId) {
+    if (!this.telegramBot) {
+        throw new Error('Telegram bot not initialized');
+    }
+
+    try {
+        // Generate QR code image
+        const qrImagePath = path.join(this.tempDir, `qr_channel_${Date.now()}.png`);
+        await qrcode.toFile(qrImagePath, qrData, {
+            width: 512,
+            margin: 2,
+            color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+            }
+        });
+
+        // Send QR code image to channel
+        await this.telegramBot.sendPhoto(channelId, qrImagePath, {
+            caption: '📱 *WhatsApp QR Code (Log Channel)*\n\n' +
+                    '🔄 Scan this QR code with WhatsApp to connect\n' +
+                    '⏰ QR code expires in 30 seconds',
+            parse_mode: 'Markdown'
+        });
+
+        // Clean up QR code file
+        setTimeout(async () => {
+            try {
+                await fs.remove(qrImagePath);
+            } catch (error) {
+                logger.debug('QR code file cleanup error:', error);
+            }
+        }, 60000);
+
+        logger.info('✅ QR code sent to Telegram log channel successfully');
+
+    } catch (error) {
+        logger.error('❌ Error sending QR code to log channel:', error);
+        throw error;
+    }
+}
+
 
 
 async sendStartMessage() {
