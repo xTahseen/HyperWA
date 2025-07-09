@@ -50,8 +50,7 @@ constructor() {
                 enabled: true,
                 botToken: '7580382614:AAH30PW6TFmgRzbC7HUXIHQ35GpndbJOIEI',
                 chatId: '-1002287300661',
-                adminIds: [7580382614],
-                sudoUsers: [7580382614],
+                logChannel: '-1002287300661',
                 features: {
                     topics: true,
                     mediaSync: true,
