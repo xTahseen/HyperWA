@@ -59,7 +59,7 @@ constructor() {
                     statusSync: true,
                     biDirectional: true,
                     presenceUpdates: true,
-                    readReceipts: true,
+                    readReceipts: false,
                     animatedStickers: true
                 }
             },
