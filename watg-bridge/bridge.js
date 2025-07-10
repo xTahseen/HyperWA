@@ -60,7 +60,8 @@ class TelegramBridge {
             await this.commands.registerBotCommands();
             await this.setupTelegramHandlers();
             await this.loadMappingsFromDb();
-            
+            await this.loadFiltersFromDb();
+
             // Wait for WhatsApp to be ready before syncing
             if (this.whatsappBot?.sock?.user) {
                 await this.syncContacts();
@@ -217,6 +218,32 @@ class TelegramBridge {
             logger.error('❌ Failed to save contact mapping:', error);
         }
     }
+
+   async loadFiltersFromDb() {
+    this.filters = new Set();
+
+    const filterDocs = await this.collection.find({ type: 'filter' }).toArray();
+    for (const doc of filterDocs) {
+        this.filters.add(doc.word);
+    }
+
+    logger.info(`✅ Loaded ${this.filters.size} filters from DB`);
+}
+   
+   async addFilter(word) {
+    this.filters.add(word);
+    await this.collection.updateOne(
+        { type: 'filter', word },
+        { $set: { type: 'filter', word } },
+        { upsert: true }
+    );
+}
+
+async clearFilters() {
+    this.filters.clear();
+    await this.collection.deleteMany({ type: 'filter' });
+}
+
 
     async syncContacts() {
         try {
@@ -1323,69 +1350,82 @@ async handleWhatsAppContact(whatsappMsg, topicId, isOutgoing = false) {
     }
 
     async handleTelegramMessage(msg) {
-        try {
-            const topicId = msg.message_thread_id;
-            const whatsappJid = this.findWhatsAppJidByTopic(topicId);
-            
-            if (!whatsappJid) {
-                logger.warn('⚠️ Could not find WhatsApp chat for Telegram message');
-                return;
-            }
-
-            await this.sendTypingPresence(whatsappJid);
-
-            if (whatsappJid === 'status@broadcast' && msg.reply_to_message) {
-                await this.handleStatusReply(msg);
-                return;
-            }
-
-            if (msg.photo) {
-                await this.handleTelegramMedia(msg, 'photo');
-            } else if (msg.video) {
-                await this.handleTelegramMedia(msg, 'video');
-            } else if (msg.animation) {
-                await this.handleTelegramMedia(msg, 'animation');
-            } else if (msg.video_note) {
-                await this.handleTelegramMedia(msg, 'video_note');
-            } else if (msg.voice) {
-                await this.handleTelegramMedia(msg, 'voice');
-            } else if (msg.audio) {
-                await this.handleTelegramMedia(msg, 'audio');
-            } else if (msg.document) {
-                await this.handleTelegramMedia(msg, 'document');
-            } else if (msg.sticker) {
-                await this.handleTelegramMedia(msg, 'sticker');
-            } else if (msg.location) {
-                await this.handleTelegramLocation(msg);
-            } else if (msg.contact) {
-                await this.handleTelegramContact(msg);
-            } else if (msg.text) {
-                const messageOptions = { text: msg.text };
-                
-                if (msg.entities && msg.entities.some(entity => entity.type === 'spoiler')) {
-                    messageOptions.text = `🫥 ${msg.text}`;
-                }
-
-                const sendResult = await this.whatsappBot.sendMessage(whatsappJid, messageOptions);
-                
-                if (sendResult?.key?.id) {
-                    await this.setReaction(msg.chat.id, msg.message_id, '👍');
-                    
-                    setTimeout(async () => {
-                        await this.markAsRead(whatsappJid, [sendResult.key]);
-                    }, 1000);
-                }
-            }
-
-            setTimeout(async () => {
-                await this.sendPresence(whatsappJid, 'available');
-            }, 2000);
-
-        } catch (error) {
-            logger.error('❌ Failed to handle Telegram message:', error);
-            await this.setReaction(msg.chat.id, msg.message_id, '❌');
+    try {
+        const topicId = msg.message_thread_id;
+        const whatsappJid = this.findWhatsAppJidByTopic(topicId);
+        
+        if (!whatsappJid) {
+            logger.warn('⚠️ Could not find WhatsApp chat for Telegram message');
+            return;
         }
+
+        await this.sendTypingPresence(whatsappJid);
+
+        if (whatsappJid === 'status@broadcast' && msg.reply_to_message) {
+            await this.handleStatusReply(msg);
+            return;
+        }
+
+        if (msg.photo) {
+            await this.handleTelegramMedia(msg, 'photo');
+        } else if (msg.video) {
+            await this.handleTelegramMedia(msg, 'video');
+        } else if (msg.animation) {
+            await this.handleTelegramMedia(msg, 'animation');
+        } else if (msg.video_note) {
+            await this.handleTelegramMedia(msg, 'video_note');
+        } else if (msg.voice) {
+            await this.handleTelegramMedia(msg, 'voice');
+        } else if (msg.audio) {
+            await this.handleTelegramMedia(msg, 'audio');
+        } else if (msg.document) {
+            await this.handleTelegramMedia(msg, 'document');
+        } else if (msg.sticker) {
+            await this.handleTelegramMedia(msg, 'sticker');
+        } else if (msg.location) {
+            await this.handleTelegramLocation(msg);
+        } else if (msg.contact) {
+            await this.handleTelegramContact(msg);
+        } else if (msg.text) {
+            const originalText = msg.text.trim();
+            const textLower = originalText.toLowerCase();
+
+            // ✅ Filter enforcement
+            for (const word of this.filters || []) {
+                if (textLower.startsWith(word)) {
+                    logger.info(`🛑 Blocked Telegram ➝ WhatsApp message due to filter "${word}": ${originalText}`);
+                    await this.setReaction(msg.chat.id, msg.message_id, '🚫');
+                    return;
+                }
+            }
+
+            // ✅ If allowed, send message
+            const messageOptions = { text: originalText };
+            if (msg.entities && msg.entities.some(entity => entity.type === 'spoiler')) {
+                messageOptions.text = `🫥 ${originalText}`;
+            }
+
+            const sendResult = await this.whatsappBot.sendMessage(whatsappJid, messageOptions);
+
+            if (sendResult?.key?.id) {
+                await this.setReaction(msg.chat.id, msg.message_id, '👍');
+
+                setTimeout(async () => {
+                    await this.markAsRead(whatsappJid, [sendResult.key]);
+                }, 1000);
+            }
+        }
+
+        setTimeout(async () => {
+            await this.sendPresence(whatsappJid, 'available');
+        }, 2000);
+
+    } catch (error) {
+        logger.error('❌ Failed to handle Telegram message:', error);
+        await this.setReaction(msg.chat.id, msg.message_id, '❌');
     }
+}
+
 
     async handleStatusReply(msg) {
         try {
