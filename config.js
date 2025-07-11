@@ -3,11 +3,11 @@ class Config {
 constructor() {
     this.defaultConfig = {
         bot: {
-            name: 'HyperWa',
-            company: 'Dawium Technologies',
+            name: 'TeleWA',
+            company: 'Dawium Inc.',
             prefix: '.',
             version: '2.0.0',
-            owner: '12103991207@s.whatsapp.net',
+            owner: '923018706705@s.whatsapp.net',
             clearAuthOnStart: false
         },
           auth: {
@@ -33,7 +33,7 @@ constructor() {
         },
             mongo: {
                 uri: 'mongodb+srv://itxelijah07:ivp8FYGsbVfjQOkj@cluster0.wh25x.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
-                dbName: 'HyperWA'
+                dbName: 'st2'
             },
             security: {
                 maxCommandsPerMinute: 10,
@@ -43,9 +43,9 @@ constructor() {
             },
             telegram: {
                 enabled: true,
-                botToken: '7996782231:AAFmr4iknSKH8SHRYFqDL6wXhe75_eunP8s',
-                chatId: '-1002833876868',
-                logChannel: '-100000000000',
+                botToken: '8067086161:AAFrUMHDDnOjmaycQ8Z27yOwLKZS7ejhNbc',
+                chatId: '-1002844789323',
+                logChannel: '-1002844789323',
                 features: {
                     topics: true,
                     mediaSync: true,
