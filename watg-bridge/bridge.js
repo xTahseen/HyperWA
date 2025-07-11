@@ -678,92 +678,106 @@ async sendStartMessage() {
     }
 
 async handleStatusMessage(whatsappMsg, text) {
-    try {
-        if (!config.get('telegram.features.statusSync')) return;
+        try {
+            if (!config.get('telegram.features.statusSync')) return;
+            
+            const participant = whatsappMsg.key.participant;
+            const phone = participant.split('@')[0];
+            const contactName = this.contactMappings.get(phone) || `+${phone}`;
+            
+            const topicId = await this.getOrCreateTopic('status@broadcast', whatsappMsg);
+            if (!topicId) return;
+            
+            // Simplified caption without date/time
+            let statusText = `📱 *Status from ${contactName}* (+${phone})`;
+            
+            if (text) {
+                statusText += `\n\n${text}`;
+            }
+            
+            const chatId = config.get('telegram.chatId');
+            
+            const mediaType = this.getMediaType(whatsappMsg);
+            if (mediaType && mediaType !== 'text') {
+                await this.forwardStatusMedia(whatsappMsg, topicId, statusText, mediaType);
+            } else {
+                const sentMsg = await this.telegramBot.sendMessage(chatId, statusText, {
+                    message_thread_id: topicId,
+                    parse_mode: 'Markdown'
+                });
+                
+                this.statusMessageMapping.set(sentMsg.message_id, whatsappMsg.key);
+            }
+            
+            if (config.get('features.autoViewStatus')) {
+                await this.whatsappBot.sock.readMessages([whatsappMsg.key]);
+            }
+            
+        } catch (error) {
+            logger.error('❌ Error handling status message:', error);
+        }
+    }
 
-        const participant = whatsappMsg.key.participant;
-        const phone = participant.split('@')[0];
-        const contactName = this.contactMappings.get(phone) || `+${phone}`;
-
-        const topicId = await this.getOrCreateTopic('status@broadcast', whatsappMsg);
-        if (!topicId) return;
-
-        let statusText = `📱 *Status from ${contactName}* (+${phone})\n\n`;
-        if (text) statusText += text;
-
-        const chatId = config.get('telegram.chatId');
-        const mediaType = this.getMediaType(whatsappMsg);
-
-        if (mediaType && mediaType !== 'text') {
-            await this.forwardStatusMedia(whatsappMsg, topicId, statusText, mediaType);
-        } else if (text) {
-            const sentMsg = await this.telegramBot.sendMessage(chatId, statusText, {
+    async forwardStatusMedia(whatsappMsg, topicId, caption, mediaType) {
+        try {
+            const stream = await downloadContentFromMessage(
+                whatsappMsg.message[`${mediaType}Message`], 
+                mediaType
+            );
+            
+            const buffer = await this.streamToBuffer(stream);
+            const chatId = config.get('telegram.chatId');
+            
+            let sentMsg;
+            switch (mediaType) {
+                case 'image':
+                    sentMsg = await this.telegramBot.sendPhoto(chatId, buffer, {
+                        message_thread_id: topicId,
+                        caption: caption,
+                        parse_mode: 'Markdown'
+                    });
+                    break;
+                case 'video':
+                    sentMsg = await this.telegramBot.sendVideo(chatId, buffer, {
+                        message_thread_id: topicId,
+                        caption: caption,
+                        parse_mode: 'Markdown'
+                    });
+                    break;
+                case 'audio':
+                    sentMsg = await this.telegramBot.sendAudio(chatId, buffer, {
+                        message_thread_id: topicId,
+                        caption: caption,
+                        parse_mode: 'Markdown'
+                    });
+                    break;
+            }
+            
+            if (sentMsg) {
+                this.statusMessageMapping.set(sentMsg.message_id, whatsappMsg.key);
+            }
+            
+        } catch (error) {
+            logger.error('❌ Error forwarding status media:', error);
+            // Only send error notification, don't duplicate the caption
+            await this.telegramBot.sendMessage(config.get('telegram.chatId'), 
+                `❌ Failed to forward status media from ${caption.split('*')[1].split('*')[0]}`, {
                 message_thread_id: topicId,
                 parse_mode: 'Markdown'
             });
-            this.statusMessageMapping.set(sentMsg.message_id, whatsappMsg.key);
         }
-
-        if (config.get('features.autoViewStatus')) {
-            await this.whatsappBot.sock.readMessages([whatsappMsg.key]);
-        }
-
-    } catch (error) {
-        logger.error('❌ Error handling status message:', error);
     }
-}
 
-async forwardStatusMedia(whatsappMsg, topicId, caption, mediaType) {
-    try {
-        const stream = await downloadContentFromMessage(
-            whatsappMsg.message[`${mediaType}Message`],
-            mediaType
-        );
-
-        const buffer = await this.streamToBuffer(stream);
-        const chatId = config.get('telegram.chatId');
-
-        let sentMsg;
-        switch (mediaType) {
-            case 'image':
-                sentMsg = await this.telegramBot.sendPhoto(chatId, buffer, {
-                    message_thread_id: topicId,
-                    caption: caption,
-                    parse_mode: 'Markdown'
-                });
-                break;
-            case 'video':
-                sentMsg = await this.telegramBot.sendVideo(chatId, buffer, {
-                    message_thread_id: topicId,
-                    caption: caption,
-                    parse_mode: 'Markdown'
-                });
-                break;
-            case 'audio':
-                sentMsg = await this.telegramBot.sendAudio(chatId, buffer, {
-                    message_thread_id: topicId,
-                    caption: caption,
-                    parse_mode: 'Markdown'
-                });
-                break;
-        }
-
-        if (sentMsg) {
-            this.statusMessageMapping.set(sentMsg.message_id, whatsappMsg.key);
-        }
-
-    } catch (error) {
-        logger.error('❌ Error forwarding status media:', error);
-
-        // Fallback: send text only if media fails
-        const sentMsg = await this.telegramBot.sendMessage(config.get('telegram.chatId'), caption, {
-            message_thread_id: topicId,
-            parse_mode: 'Markdown'
-        });
-        this.statusMessageMapping.set(sentMsg.message_id, whatsappMsg.key);
+    getMediaType(msg) {
+        if (msg.message?.imageMessage) return 'image';
+        if (msg.message?.videoMessage) return 'video';
+        if (msg.message?.audioMessage) return 'audio';
+        if (msg.message?.documentMessage) return 'document';
+        if (msg.message?.stickerMessage) return 'sticker';
+        if (msg.message?.locationMessage) return 'location';
+        if (msg.message?.contactMessage) return 'contact';
+        return 'text';
     }
-}
-
        async syncOutgoingMessage(whatsappMsg, text, topicId, sender) {
             if (!config.get('telegram.features.sendOutgoingMessages')) return;
         try {
