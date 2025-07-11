@@ -35,11 +35,6 @@ constructor() {
                 uri: 'mongodb+srv://itxelijah07:ivp8FYGsbVfjQOkj@cluster0.wh25x.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
                 dbName: 'HyperWA'
             },
-            apis: {
-                ninjas: 'YOUR_API_KEY',
-                weather: 'YOUR_WEATHER_KEY',
-                translate: ''
-            },
             security: {
                 maxCommandsPerMinute: 10,
                 maxDownloadsPerHour: 20,
@@ -58,6 +53,8 @@ constructor() {
                     callLogs: true,
                     statusSync: true,
                     biDirectional: true,
+                    welcomeMessage: true,       // set to false to disable welcome message sent when topic created
+                    sendOutgoingMessages: true,  // set to false to stop forwarding myside messages
                     presenceUpdates: true,
                     readReceipts: false,
                     animatedStickers: true
