@@ -7,14 +7,14 @@ constructor() {
             company: 'Dawium Technologies',
             prefix: '.',
             version: '2.0.0',
-            owner: '923298784489@s.whatsapp.net',
+            owner: '12103991207@s.whatsapp.net',
             clearAuthOnStart: false
         },
           auth: {
                 useMongoAuth: true, //  set to false for file-based auth, ture mongodb auth base
      },
         admins: [
-            '923001112222',  // Just the number part, no "@s.whatsapp.net"
+            '923075417411',  // Just the number part, no "@s.whatsapp.net"
             '923334445555'
         ],  
 
@@ -43,9 +43,9 @@ constructor() {
             },
             telegram: {
                 enabled: true,
-                botToken: '7580382614:AAH30PW6TFmgRzbC7HUXIHQ35GpndbJOIEI',
-                chatId: '-1002287300661',
-                logChannel: '-1002287300661',
+                botToken: '7996782231:AAFmr4iknSKH8SHRYFqDL6wXhe75_eunP8s',
+                chatId: '-1002833876868',
+                logChannel: '-100000000000',
                 features: {
                     topics: true,
                     mediaSync: true,
