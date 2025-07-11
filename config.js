@@ -53,7 +53,7 @@ constructor() {
                     callLogs: true,
                     statusSync: true,
                     biDirectional: true,
-                    welcomeMessage: true,       // set to false to disable welcome message sent when topic created
+                    welcomeMessage: false,       // set to false to disable welcome message sent when topic created
                     sendOutgoingMessages: false,  // set to false to stop forwarding myside messages
                     presenceUpdates: true,
                     readReceipts: false,
