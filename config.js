@@ -44,6 +44,7 @@ constructor() {
             telegram: {
                 enabled: true,
                 botToken: '7822179405:AAHI1zW7qkXZsqOtyu9NeRdmquwbx1aZu0o',
+                botPassword: '1122',
                 chatId: '-1002783833178',
                 logChannel: '-100000000000',
                 features: {
