@@ -12,6 +12,7 @@ const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const ffmpeg = require('fluent-ffmpeg');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const { exec } = require('child_process');
+const qrcode = require('qrcode');
 
 
 class TelegramBridge {
@@ -35,6 +36,7 @@ class TelegramBridge {
         this.lastPresenceUpdate = new Map();
         this.topicVerificationCache = new Map();
         this.creatingTopics = new Map(); // jid => Promise
+        this.userChatIds = new Set(); // Runtime memory
 
     }
 
@@ -60,6 +62,7 @@ class TelegramBridge {
             await this.commands.registerBotCommands();
             await this.setupTelegramHandlers();
             await this.loadMappingsFromDb();
+            await this.loadUserChatIds();
             await this.loadFiltersFromDb();
 
             
@@ -156,6 +159,16 @@ class TelegramBridge {
             logger.error('❌ Failed to save chat mapping:', error);
         }
     }
+    
+   async loadUserChatIds() {
+    try {
+        const users = await this.collection.find({ type: 'userChat' }).toArray();
+        this.userChatIds = new Set(users.map(u => u.chatId));
+        logger.info(`✅ Loaded ${this.userChatIds.size} Telegram bot users`);
+    } catch (err) {
+        logger.error('❌ Failed to load user chat IDs:', err);
+    }
+}
 
    async loadFiltersFromDb() {
     this.filters = new Set();
@@ -358,25 +371,82 @@ async clearFilters() {
     }
 
     async setupTelegramHandlers() {
-        this.telegramBot.on('message', this.wrapHandler(async (msg) => {
-            if (msg.chat.type === 'private') {
-                this.botChatId = msg.chat.id;
-                await this.commands.handleCommand(msg);
-            } else if (msg.chat.type === 'supergroup' && msg.is_topic_message) {
-                await this.handleTelegramMessage(msg);
+    this.awaitingPassword = new Set(); // 🆕 Track users awaiting password
+
+    this.telegramBot.on('message', this.wrapHandler(async (msg) => {
+        const chatType = msg.chat.type;
+
+        // ✅ 1. Private chat (user DMs the bot)
+        if (chatType === 'private') {
+            const chatId = msg.chat.id;
+            const BOT_PASSWORD = config.get('telegram.botPassword');
+
+            const isVerified = await this.collection.findOne({ type: 'userChat', chatId });
+
+            if (!isVerified) {
+                // 🔒 If waiting for password
+                if (this.awaitingPassword.has(chatId)) {
+                    if (msg.text?.trim() === BOT_PASSWORD) {
+                        // ✅ Store verified user
+                        await this.collection.insertOne({
+                            type: 'userChat',
+                            chatId,
+                            firstSeen: new Date()
+                        });
+
+                        this.userChatIds.add(chatId);
+                        this.botChatId = chatId;
+                        this.awaitingPassword.delete(chatId);
+
+                        await this.telegramBot.sendMessage(chatId, '✅ Access granted! You can now use the bot.');
+                        logger.info(`🔓 Telegram bot access granted: ${chatId}`);
+                    } else {
+                        await this.telegramBot.sendMessage(chatId, '❌ Incorrect password. Try again:');
+                    }
+                    return;
+                }
+
+                // 🛑 Not verified and not prompted yet
+                this.awaitingPassword.add(chatId);
+                await this.telegramBot.sendMessage(chatId, '🔐 This bot is password-protected.\nPlease enter the password to continue:');
+                return;
             }
-        }));
 
-        this.telegramBot.on('polling_error', (error) => {
-            logger.error('Telegram polling error:', error);
-        });
+            // ✅ Already verified user
+            this.userChatIds.add(chatId);
+            this.botChatId = chatId;
 
-        this.telegramBot.on('error', (error) => {
-            logger.error('Telegram bot error:', error);
-        });
+            await this.commands.handleCommand(msg);
+        }
 
-        logger.info('📱 Telegram message handlers set up');
-    }
+        // ✅ 2. Group messages from forum topics
+        else if (
+            (chatType === 'supergroup' || chatType === 'group') &&
+            msg.is_topic_message &&
+            msg.message_thread_id
+        ) {
+            await this.handleTelegramMessage(msg);
+        }
+
+        // ❗ 3. Unexpected thread messages
+        else if (msg.message_thread_id) {
+            logger.warn(`⚠️ Received thread message in unexpected context (chatType=${chatType}), attempting to handle`);
+            await this.handleTelegramMessage(msg);
+        }
+    }));
+
+    this.telegramBot.on('polling_error', (error) => {
+        logger.error('Telegram polling error:', error);
+    });
+
+    this.telegramBot.on('error', (error) => {
+        logger.error('Telegram bot error:', error);
+    });
+
+    logger.info('📱 Telegram message handlers set up');
+}
+
+
 
     wrapHandler(handler) {
         return async (...args) => {
@@ -409,132 +479,85 @@ async clearFilters() {
     }
 
 async sendQRCode(qrData) {
-    if (!this.telegramBot) {
-        throw new Error('Telegram bot not initialized');
-    }
+    if (!this.telegramBot) return;
 
-    const chatId = config.get('telegram.chatId');
-    if (!chatId) {
-        throw new Error('Telegram chat ID not configured');
-    }
+    const qrImagePath = path.join(this.tempDir, `qr_${Date.now()}.png`);
+    await qrcode.toFile(qrImagePath, qrData, {
+        width: 512,
+        margin: 2,
+        color: { dark: '#000000', light: '#FFFFFF' }
+    });
 
-    try {
-        // Generate QR code image
-        const qrImagePath = path.join(this.tempDir, `qr_${Date.now()}.png`);
-        await qrcode.toFile(qrImagePath, qrData, {
-            width: 512,
-            margin: 2,
-            color: {
-                dark: '#000000',
-                light: '#FFFFFF'
-            }
-        });
-
-        // Send QR code image
-        await this.telegramBot.sendPhoto(chatId, qrImagePath, {
-            caption: '📱 *WhatsApp QR Code*\n\n' +
+    const caption = '📱 *WhatsApp QR Code*\n\n' +
                     '🔄 Scan this QR code with WhatsApp to connect\n' +
                     '⏰ QR code expires in 30 seconds\n\n' +
-                    '💡 Open WhatsApp → Settings → Linked Devices → Link a Device',
-            parse_mode: 'Markdown'
-        });
+                    '💡 Open WhatsApp → Settings → Linked Devices → Link a Device';
 
-        // Clean up QR code file after 60 seconds
-        setTimeout(async () => {
-            try {
-                await fs.remove(qrImagePath);
-            } catch (error) {
-                logger.debug('QR code file cleanup error:', error);
-            }
-        }, 60000);
+    const opts = { caption, parse_mode: 'Markdown' };
 
-        logger.info('✅ QR code sent to Telegram successfully');
-
-    } catch (error) {
-        logger.error('❌ Error sending QR code to Telegram:', error);
-        throw error;
+    for (const chatId of this.userChatIds) {
+        try {
+            await this.telegramBot.sendPhoto(chatId, qrImagePath, opts);
+        } catch (err) {
+            logger.warn(`⚠️ Failed to send QR to ${chatId}:`, err.message);
+        }
     }
+
+    const logChannel = config.get('telegram.logChannel');
+    if (logChannel && !logChannel.includes('YOUR_LOG_CHANNEL')) {
+        try {
+            await this.telegramBot.sendPhoto(logChannel, qrImagePath, opts);
+        } catch (err) {
+            logger.warn(`⚠️ Failed to send QR to log channel: ${err.message}`);
+        }
+    }
+
+    setTimeout(() => fs.remove(qrImagePath).catch(() => {}), 60000);
+    logger.info(`✅ Sent QR code to ${this.userChatIds.size} users`);
 }
 
-async sendQRCodeToChannel(qrData, channelId) {
-    if (!this.telegramBot) {
-        throw new Error('Telegram bot not initialized');
-    }
 
-    try {
-        // Generate QR code image
-        const qrImagePath = path.join(this.tempDir, `qr_channel_${Date.now()}.png`);
-        await qrcode.toFile(qrImagePath, qrData, {
-            width: 512,
-            margin: 2,
-            color: {
-                dark: '#000000',
-                light: '#FFFFFF'
-            }
-        });
-
-        // Send QR code image to channel
-        await this.telegramBot.sendPhoto(channelId, qrImagePath, {
-            caption: '📱 *WhatsApp QR Code (Log Channel)*\n\n' +
-                    '🔄 Scan this QR code with WhatsApp to connect\n' +
-                    '⏰ QR code expires in 30 seconds',
-            parse_mode: 'Markdown'
-        });
-
-        // Clean up QR code file
-        setTimeout(async () => {
-            try {
-                await fs.remove(qrImagePath);
-            } catch (error) {
-                logger.debug('QR code file cleanup error:', error);
-            }
-        }, 60000);
-
-        logger.info('✅ QR code sent to Telegram log channel successfully');
-
-    } catch (error) {
-        logger.error('❌ Error sending QR code to log channel:', error);
-        throw error;
+async sendToAllUsers(text, extra = {}) {
+    for (const chatId of this.userChatIds) {
+        try {
+            await this.telegramBot.sendMessage(chatId, text, extra);
+        } catch (err) {
+            logger.warn(`⚠️ Failed to send message to user ${chatId}: ${err.message}`);
+        }
     }
 }
-
 
 
 async sendStartMessage() {
+    const startMessage = `🚀 *HyperWa Bridge Started Successfully!*\n\n` +
+                         `✅ WhatsApp: Connected\n` +
+                         `✅ Telegram Bridge: Active\n` +
+                         `📞 Contacts: ${this.contactMappings.size} synced\n` +
+                         `💬 Chats: ${this.chatMappings.size} mapped\n` +
+                         `🔗 Ready to bridge messages!\n\n` +
+                         `⏰ Started at: ${new Date().toLocaleString()}`;
+
+    // Send to all users
     try {
-        if (!this.telegramBot) return;
-
-        const chatId = config.get('telegram.chatId');
-        const logChannel = config.get('telegram.logChannel');
-
-        const startMessage = `🚀 *HyperWa Bridge Started Successfully!*\n\n` +
-                             `✅ WhatsApp: Connected\n` +
-                             `✅ Telegram Bridge: Active\n` +
-                             `📞 Contacts: ${this.contactMappings.size} synced\n` +
-                             `💬 Chats: ${this.chatMappings.size} mapped\n` +
-                             `🔗 Ready to bridge messages!\n\n` +
-                             `⏰ Started at: ${new Date().toLocaleString()}`;
-
-        // ✅ Send to main bot chat
-        if (chatId && !chatId.includes('YOUR_CHAT_ID')) {
-            await this.telegramBot.sendMessage(chatId, startMessage, {
-                parse_mode: 'Markdown'
-            });
-        }
-
-        // ✅ Send to log channel if configured
-        if (logChannel && !logChannel.includes('YOUR_LOG_CHANNEL')) {
-            await this.telegramBot.sendMessage(logChannel, startMessage, {
-                parse_mode: 'Markdown'
-            });
-        }
-
-        logger.info('🚀 Start message sent to Telegram bot and log channel');
+        await this.sendToAllUsers(startMessage, { parse_mode: 'Markdown' });
+        logger.info('✅ Start message sent to all users');
     } catch (error) {
-        logger.error('❌ Failed to send start message to Telegram:', error);
+        logger.error('❌ Failed to send start message to users:', error);
+    }
+
+    // Send to log channel
+    const logChannel = config.get('telegram.logChannel');
+    if (logChannel && !logChannel.includes('YOUR_LOG_CHANNEL')) {
+        try {
+            await this.telegramBot.sendMessage(logChannel, startMessage, { parse_mode: 'Markdown' });
+            logger.info('✅ Start message sent to Telegram log channel');
+        } catch (error) {
+            logger.error('❌ Failed to send start message to Telegram log channel:', error);
+        }
+    } else {
+        logger.warn('⚠️ Log channel not configured or left as default placeholder');
     }
 }
-
 
     async sendPresence(jid, presenceType = 'available') {
         try {
@@ -579,7 +602,7 @@ async sendStartMessage() {
     }
 
     
-    async recreateMissingTopics() {
+     async recreateMissingTopics() {
         try {
             logger.info('🔄 Checking for missing topics...');
             const toRecreate = [];
@@ -931,7 +954,7 @@ getMediaType(msg) {
         logger.debug(`👤 Created user mapping: ${userName || userPhone} (${userPhone})`);
     }
 
-    async getOrCreateTopic(chatJid, whatsappMsg) {
+   async getOrCreateTopic(chatJid, whatsappMsg) {
     // ✅ If topic already cached, return
     if (this.chatMappings.has(chatJid)) {
         return this.chatMappings.get(chatJid);
@@ -1007,8 +1030,6 @@ getMediaType(msg) {
     this.creatingTopics.set(chatJid, creationPromise);
     return await creationPromise;
 }
-
-
     async sendWelcomeMessage(topicId, jid, isGroup, whatsappMsg, initialProfilePicUrl = null) {
         try {
             const chatId = config.get('telegram.chatId');
@@ -1072,83 +1093,89 @@ getMediaType(msg) {
     }
 
     async sendProfilePicture(topicId, jid, isUpdate = false) {
-        try {
-            if (!config.get('telegram.features.profilePicSync')) {
-                logger.debug(`📸 Profile pic sync disabled for ${jid}`);
-                return;
-            }
-            
-            logger.debug(`📸 Checking profile picture for ${jid} (update: ${isUpdate})`);
-            
-            let currentProfilePicUrl = null;
-            try {
-                currentProfilePicUrl = await this.whatsappBot.sock.profilePictureUrl(jid, 'image');
-                logger.debug(`📸 Current profile pic URL for ${jid}: ${currentProfilePicUrl || 'none'}`);
-            } catch (error) {
-                logger.debug(`📸 No profile picture found for ${jid}: ${error.message}`);
-            }
-            
-            const cachedProfilePicUrl = this.profilePicCache.get(jid);
-            logger.debug(`📸 Cached profile pic URL for ${jid}: ${cachedProfilePicUrl || 'none'}`);
-            
-            // Check if URL has changed
-            if (currentProfilePicUrl === cachedProfilePicUrl) {
-                logger.debug(`📸 ⏭️ Profile picture URL unchanged for ${jid}, skipping send`);
-                return;
-            }
-            
-            if (currentProfilePicUrl) {
-                const caption = isUpdate ? '📸 Profile picture updated' : '📸 Profile Picture';
-                
-                logger.info(`📸 Sending ${isUpdate ? 'updated' : 'initial'} profile picture for ${jid}`);
-                
-                await this.telegramBot.sendPhoto(config.get('telegram.chatId'), currentProfilePicUrl, {
-                    message_thread_id: topicId,
-                    caption: caption
-                });
-                
-                // Update cache and database
-                await this.updateProfilePicUrl(jid, currentProfilePicUrl);
-                logger.info(`📸 ✅ Profile picture ${isUpdate ? 'update' : 'sent'} for ${jid}`);
-            } else {
-                logger.debug(`📸 No profile picture available for ${jid}`);
-            }
-        } catch (error) {
-            logger.error(`📸 ❌ Could not send profile picture for ${jid}:`, error);
+    try {
+        if (!config.get('telegram.features.profilePicSync')) {
+            logger.debug(`📸 Profile pic sync disabled for ${jid}`);
+            return;
         }
+
+        logger.debug(`📸 Checking profile picture for ${jid} (update: ${isUpdate})`);
+
+        // 1. Fetch latest URL from WhatsApp
+        let currentProfilePicUrl = null;
+        try {
+            currentProfilePicUrl = await this.whatsappBot.sock.profilePictureUrl(jid, 'image');
+            logger.debug(`📸 Current profile pic URL from WhatsApp: ${currentProfilePicUrl || 'none'}`);
+        } catch (error) {
+            logger.debug(`📸 No profile picture found for ${jid}: ${error.message}`);
+        }
+
+        if (!currentProfilePicUrl) {
+            logger.debug(`📸 No profile picture to send for ${jid}`);
+            return;
+        }
+
+        // 2. Get stored URL from DB
+        const dbEntry = await this.collection.findOne({ type: 'chat', 'data.whatsappJid': jid });
+        const storedProfilePicUrl = dbEntry?.data?.profilePicUrl || null;
+
+        // 3. Compare with DB value
+        if (currentProfilePicUrl === storedProfilePicUrl) {
+            logger.debug(`📸 ⏭️ Profile picture unchanged for ${jid}, skipping send`);
+            this.profilePicCache.set(jid, currentProfilePicUrl); // Refresh cache anyway
+            return;
+        }
+
+        // 4. Send the image
+        const caption = isUpdate ? '📸 Profile picture updated' : '📸 Profile Picture';
+
+        await this.telegramBot.sendPhoto(config.get('telegram.chatId'), currentProfilePicUrl, {
+            message_thread_id: topicId,
+            caption: caption
+        });
+
+        // 5. Update DB + cache
+        await this.updateProfilePicUrl(jid, currentProfilePicUrl);
+        this.profilePicCache.set(jid, currentProfilePicUrl);
+
+        logger.info(`📸 ✅ Sent ${isUpdate ? 'updated' : 'initial'} profile picture for ${jid}`);
+    } catch (error) {
+        logger.error(`📸 ❌ Could not send profile picture for ${jid}:`, error);
     }
+}
+
 
     async sendProfilePictureWithUrl(topicId, jid, profilePicUrl, isUpdate = false) {
-        try {
-            if (!config.get('telegram.features.profilePicSync')) {
-                logger.debug(`📸 Profile pic sync disabled for ${jid}`);
-                return;
-            }
-            
-            if (!profilePicUrl) {
-                logger.debug(`📸 No profile picture URL provided for ${jid}`);
-                return;
-            }
-            
-            const caption = isUpdate ? '📸 Profile picture updated' : '📸 Profile Picture';
-            
-            logger.info(`📸 Sending ${isUpdate ? 'updated' : 'initial'} profile picture for ${jid}`);
-            
-            await this.telegramBot.sendPhoto(config.get('telegram.chatId'), profilePicUrl, {
-                message_thread_id: topicId,
-                caption: caption
-            });
-            
-            // Update cache and database
-            await this.updateProfilePicUrl(jid, profilePicUrl);
-            logger.info(`📸 ✅ Profile picture ${isUpdate ? 'update' : 'sent'} for ${jid}`);
-            
-        } catch (error) {
-            logger.error(`📸 ❌ Could not send profile picture for ${jid}:`, error);
+    try {
+        if (!config.get('telegram.features.profilePicSync')) {
+            logger.debug(`📸 Profile pic sync disabled for ${jid}`);
+            return;
         }
-    }
 
-    async handleCallNotification(callEvent) {
+        if (!profilePicUrl) {
+            logger.debug(`📸 No profile picture URL provided for ${jid}`);
+            return;
+        }
+
+        const caption = isUpdate ? '📸 Profile picture updated' : '📸 Profile Picture';
+
+        await this.telegramBot.sendPhoto(config.get('telegram.chatId'), profilePicUrl, {
+            message_thread_id: topicId,
+            caption: caption
+        });
+
+        // Always update DB and cache to ensure consistency
+        await this.updateProfilePicUrl(jid, profilePicUrl);
+        this.profilePicCache.set(jid, profilePicUrl);
+
+        logger.info(`📸 ✅ Sent ${isUpdate ? 'updated' : 'initial'} profile picture for ${jid}`);
+    } catch (error) {
+        logger.error(`📸 ❌ Could not send profile picture with URL for ${jid}:`, error);
+    }
+}
+
+
+     async handleCallNotification(callEvent) {
         if (!this.telegramBot || !config.get('telegram.features.callLogs')) return;
 
         const callerId = callEvent.from;
