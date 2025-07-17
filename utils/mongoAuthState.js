@@ -61,7 +61,6 @@ async function useMongoAuthState() {
         );
 
         await fs.remove(AUTH_TAR);
-        console.log("💾 Session saved to MongoDB.");
     }
 
     return { state, saveCreds };
