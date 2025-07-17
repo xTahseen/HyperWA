@@ -1807,7 +1807,7 @@ async handleWhatsAppContact(whatsappMsg, topicId, isOutgoing = false) {
                 })
                 .save(outputPath);
         });
-    }
+    } 
 
     async handleTelegramLocation(msg) {
         try {
