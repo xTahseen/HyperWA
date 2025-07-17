@@ -17,9 +17,11 @@ async function useMongoAuthState() {
 
     // Step 2: Restore session from DB if it exists
     const session = await coll.findOne({ _id: "session" });
-    if (session?.archive?.buffer) {
+    const archiveBuffer = session?.archive?.buffer || session?.archive;
+
+    if (archiveBuffer && Buffer.isBuffer(archiveBuffer)) {
         try {
-            await fs.writeFile(AUTH_TAR, session.archive.buffer);
+            await fs.writeFile(AUTH_TAR, archiveBuffer);
             await tar.x({ file: AUTH_TAR, C: ".", strict: true });
 
             const credsPath = path.join(AUTH_DIR, "creds.json");
