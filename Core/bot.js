@@ -116,39 +116,23 @@ class HyperWaBot {
             const { connection, lastDisconnect, qr } = update;
 
 // In the connection.update handler:
+
 if (qr) {
     logger.info('📱 WhatsApp QR code generated');
-    
+
     // Always show in terminal as fallback
     qrcode.generate(qr, { small: true });
-    
-    // Enhanced Telegram QR sending with retries
+
+    // Send QR via Telegram (no retries, no post-send logs)
     if (this.telegramBridge) {
-        let attempts = 0;
-        const maxAttempts = 3;
-        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-        
-        while (attempts < maxAttempts) {
-            attempts++;
-            try {
-                await delay(500 * attempts); // Progressive delay
-                
-                logger.debug(`Attempt ${attempts} to send QR via Telegram...`);
-                const success = await this.telegramBridge.sendQRCode(qr);
-                
-                if (success) {
-                    logger.info('✅ QR code successfully sent to Telegram');
-                    break;
-                }
-            } catch (error) {
-                logger.error(`Attempt ${attempts} failed:`, error.message);
-                if (attempts === maxAttempts) {
-                    logger.error('❌ All attempts to send QR via Telegram failed');
-                }
-            }
+        try {
+            await this.telegramBridge.sendQRCode(qr);
+        } catch (error) {
+            logger.error('❌ Error sending QR code to Telegram:', error.message);
         }
     }
 }
+
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode || 0;
@@ -204,29 +188,29 @@ if (qr) {
         }
     }
 
-    async sendStartupMessage() {
-        const owner = config.get('bot.owner');
-        if (!owner) return;
+async sendStartupMessage() {
+    const owner = config.get('bot.owner');
+    if (!owner) return;
 
-        const authMethod = this.useMongoAuth ? 'MongoDB' : 'File-based';
-        const startupMessage = `🚀 *${config.get('bot.name')} v${config.get('bot.version')}* is now online!\n\n` +
-                              `🔥 *HyperWa Features Active:*\n` +
-                              `• 📱 Modular Architecture\n` +
-                              `• 🔐 Auth Method: ${authMethod}\n` +
-                              `• 🤖 Telegram Bridge: ${config.get('telegram.enabled') ? '✅' : '❌'}\n` +
-                              `• 🔧 Custom Modules: ${config.get('features.customModules') ? '✅' : '❌'}\n` +
-                              `Type *${config.get('bot.prefix')}help* for available commands!`;
+    const authMethod = this.useMongoAuth ? 'MongoDB' : 'File-based';
+    const startupMessage = `🚀 *${config.get('bot.name')} v${config.get('bot.version')}* is now online!\n\n` +
+                          `🔥 *HyperWa Features Active:*\n` +
+                          `• 📱 Modular Architecture\n` +
+                          `• 🔐 Auth Method: ${authMethod}\n` +
+                          `• 🤖 Telegram Bridge: ${config.get('telegram.enabled') ? '✅' : '❌'}\n` +
+                          `• 🔧 Custom Modules: ${config.get('features.customModules') ? '✅' : '❌'}\n` +
+                          `Type *${config.get('bot.prefix')}help* for available commands!`;
 
+    try {
+        await this.sock.sendMessage(owner, { text: startupMessage });
+    } catch {}
+
+    if (this.telegramBridge) {
         try {
-            await this.sock.sendMessage(owner, { text: startupMessage });
-            
-            if (this.telegramBridge) {
-                await this.telegramBridge.logToTelegram('🚀 HyperWa Bot Started', startupMessage);
-            }
-        } catch (error) {
-            logger.error('Failed to send startup message:', error);
-        }
+            await this.telegramBridge.logToTelegram('🚀 HyperWa Bot Started', startupMessage);
+        } catch {}
     }
+}
 
     async connect() {
         if (!this.sock) {
