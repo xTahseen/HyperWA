@@ -49,13 +49,13 @@ class CoreCommands {
     async ping(msg, params, context) {
         const start = Date.now();
         const pingMsg = await context.bot.sendMessage(context.sender, {
-            text: '🏓 *Pinging...*\n\n⏳ Calculating response time...'
+            text: '*Pinging...*'
         });
         
         const latency = Date.now() - start;
         
         await context.bot.sock.sendMessage(context.sender, {
-            text: `🏓 *Pong!*\n\n⚡ **Response Time:** ${latency}ms\n🤖 **Status:** Online\n⏰ **Time:** ${new Date().toLocaleTimeString()}`,
+            text: `*Pong!* [${latency}ms]`,
             edit: pingMsg.key
         });
     }
@@ -65,22 +65,22 @@ class CoreCommands {
         const uptimeString = this.formatUptime(uptime);
         const memUsage = process.memoryUsage();
         
-        let statusText = `📊 *Bot Status*\n\n`;
-        statusText += `🤖 **Bot:** ${config.get('bot.name')} v${config.get('bot.version')}\n`;
-        statusText += `⏰ **Uptime:** ${uptimeString}\n`;
-        statusText += `💾 **Memory:** ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB\n`;
-        statusText += `📱 **WhatsApp:** ${context.bot.sock?.user ? '✅ Connected' : '❌ Disconnected'}\n`;
+        let statusText = `*Bot Status*\n\n`;
+        statusText += `*Bot:* ${config.get('bot.name')} v${config.get('bot.version')}\n`;
+        statusText += `*Uptime:* ${uptimeString}\n`;
+        statusText += `*Memory:* ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB\n`;
+        statusText += `*WhatsApp:* ${context.bot.sock?.user ? 'Active' : 'Disconnected'}\n`;
         
         if (context.bot.telegramBridge) {
-            statusText += `🔗 **Telegram Bridge:** ✅ Active\n`;
-            statusText += `📞 **Contacts:** ${context.bot.telegramBridge.contactMappings.size}\n`;
-            statusText += `💬 **Chats:** ${context.bot.telegramBridge.chatMappings.size}\n`;
+            statusText += `*Telegram Bridge:* Active\n`;
+            statusText += `*Contacts:* ${context.bot.telegramBridge.contactMappings.size}\n`;
+            statusText += `*Chats:* ${context.bot.telegramBridge.chatMappings.size}\n`;
         } else {
-            statusText += `🔗 **Telegram Bridge:** ❌ Inactive\n`;
+            statusText += `*Telegram Bridge:* Inactive\n`;
         }
         
-        statusText += `🔧 **Modules:** ${context.bot.moduleLoader.modules.size}\n`;
-        statusText += `📋 **Commands:** ${context.bot.messageHandler.commandHandlers.size}`;
+        statusText += `*Modules:* ${context.bot.moduleLoader.modules.size}\n`;
+        statusText += `*Commands:* ${context.bot.messageHandler.commandHandlers.size}`;
 
         await context.bot.sendMessage(context.sender, { text: statusText });
     }
@@ -89,12 +89,12 @@ class CoreCommands {
         const owner = config.get('bot.owner');
         if (context.participant !== owner && !msg.key.fromMe) {
             return context.bot.sendMessage(context.sender, {
-                text: '❌ Only the bot owner can restart the bot.'
+                text: 'Only the bot owner can restart the bot.'
             });
         }
 
         await context.bot.sendMessage(context.sender, {
-            text: '🔄 *Restarting Bot*\n\n⏳ Please wait while the bot restarts...'
+            text: '*Restarting Bot*'
         });
 
         setTimeout(() => {
