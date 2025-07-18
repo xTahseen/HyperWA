@@ -6,14 +6,14 @@ constructor() {
             company: 'Dawium Technologies',
             prefix: '.',
             version: '2.0.0',
-            owner: '923417033005@s.whatsapp.net',
+            owner: '923018706705@s.whatsapp.net',
             clearAuthOnStart: false
         },
           auth: {
                 useMongoAuth: true, //  set to false for file-based auth, ture mongodb auth base
      },
         admins: [
-            '923075417411',  // Just the number part, no "@s.whatsapp.net"
+            '923018706705',  // Just the number part, no "@s.whatsapp.net"
             '923334445555'
         ],  
 
@@ -32,7 +32,7 @@ constructor() {
         },
             mongo: {
                 uri: 'mongodb+srv://itxelijah07:ivp8FYGsbVfjQOkj@cluster0.wh25x.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
-                dbName: 'HyperWALex'
+                dbName: 'st2'
             },
             security: {
                 maxCommandsPerMinute: 10,
@@ -42,10 +42,10 @@ constructor() {
             },
             telegram: {
                 enabled: true,
-                botToken: '7822179405:AAHI1zW7qkXZsqOtyu9NeRdmquwbx1aZu0o',
+                botToken: '8067086161:AAFrUMHDDnOjmaycQ8Z27yOwLKZS7ejhNbc',
                 botPassword: '1122',
-                chatId: '-1002783833178',
-                logChannel: '-100000000000',
+                chatId: '-1002844789323',
+                logChannel: '-1002844789323',
                 features: {
                     topics: true,
                     mediaSync: true,
