@@ -1,4 +1,3 @@
-
 class Config {
 constructor() {
     this.defaultConfig = {
@@ -57,7 +56,7 @@ constructor() {
                     welcomeMessage: false,       // set to false to disable welcome message sent when topic created
                     sendOutgoingMessages: false,  // set to false to stop forwarding myside messages
                     presenceUpdates: true,
-                    readReceipts: false,
+                    readReceipts: true,
                     animatedStickers: true
                 }
             },
